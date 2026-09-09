@@ -1,0 +1,21 @@
+{
+  "name": "affiliate-portal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Affiliate signup submission and approval dashboard",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@google-cloud/storage": "^7.22.0",
+    "nodemailer": "^9.0.5",
+    "pdfkit": "^0.19.1"
+  },
+  "devDependencies": {
+    "firebase-tools": "^15.26.0"
+  }
+}

@@ -1,0 +1,8 @@
+# Forwards every visitor of pickrpicks.app to your live app on Google Cloud Run.
+# Your domain + HTTPS stay exactly as they are on Netlify. No DNS changes needed.
+
+[[redirects]]
+  from = "/*"
+  to = "https://pickr-affiliate-portal-1019752621853.us-central1.run.app/:splat"
+  status = 200
+  force = true
