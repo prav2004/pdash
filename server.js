@@ -25,6 +25,10 @@ const OPERATOR_RATES = {
 const REPORT_RECIPIENT = process.env.REPORT_RECIPIENT || 'pickrpicks@gmail.com';
 const REPORT_SCHEDULE_TOKEN = process.env.REPORT_SCHEDULE_TOKEN || '';
 
+function availableOperatorRates(db, user) {
+  return { ...(db.operatorRates || {}), ...(user?.operatorRates || {}) };
+}
+
 function now() { return new Date().toISOString(); }
 function id(prefix = '') { return prefix + crypto.randomBytes(10).toString('hex'); }
 function normalize(v) { return String(v || '').trim(); }
@@ -568,6 +572,16 @@ async function api(req, res, url) {
     return sendJson(res, 200, { submissions: rows });
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/operators') {
+    const user = requireUser(req, res, db, ['affiliate', 'commission_worker', 'account_manager']);
+    if (!user) return;
+    const operators = Object.entries(availableOperatorRates(db, user)).map(([name, rates]) => ({
+      name,
+      workerEarnings: Number(rates.workerEarnings || 0)
+    }));
+    return sendJson(res, 200, { operators });
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/submissions') {
     const user = requireUser(req, res, db, ['affiliate', 'commission_worker', 'account_manager']);
     if (!user) return;
@@ -588,7 +602,8 @@ async function api(req, res, url) {
     if (!customerName || !pickrUsername || !operator || !signupDate) {
       return sendJson(res, 400, { error: 'User name, Pickr username, operator, and signup date are required.' });
     }
-    if (!db.operatorRates || !Object.prototype.hasOwnProperty.call(db.operatorRates, operator)) {
+    const availableRates = availableOperatorRates(db, user);
+    if (!Object.prototype.hasOwnProperty.call(availableRates, operator)) {
       return sendJson(res, 400, { error: 'Choose one of the available operators.' });
     }
     if (files.length > MAX_UPLOAD_FILES) {
@@ -693,13 +708,12 @@ async function api(req, res, url) {
     if (status === 'approved' && oldStatus !== 'approved') {
       db.commissions = db.commissions || [];
       const operator = record.operator;
-      const rates = db.operatorRates && db.operatorRates[operator];
+      const submittingUser = db.users.find(u => u.id === record.affiliateId);
+      const rates = availableOperatorRates(db, submittingUser)[operator];
       
       if (rates) {
         const workerEarnings = rates.workerEarnings || 0;
         const managerEarnings = rates.managerEarnings || 0;
-        
-        const submittingUser = db.users.find(u => u.id === record.affiliateId);
 
         // Direct commission: workers receive their configured amount, and managers
         // receive that same amount when they submit their own verified users.

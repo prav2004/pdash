@@ -159,7 +159,7 @@ async function navigate(page){
   if(page!=='submit') $('#content').innerHTML = skeleton();
   try {
     if(page==='dashboard') await renderDashboard();
-    if(page==='submit') renderSubmit();
+    if(page==='submit') await renderSubmit();
     if(page==='submissions') await renderSubmissions();
     if(page==='affiliates') await renderAffiliates();
     if(page==='audit') await renderAudit();
@@ -226,8 +226,10 @@ async function renderDashboard(){
   $$('tr[data-id]').forEach(r=>r.onclick=()=>openSubmission(r.dataset.id, recent));
 }
 
-function renderSubmit(){
+async function renderSubmit(){
   if(!['affiliate','commission_worker','account_manager'].includes(state.user.role)) return navigate('dashboard');
+  const {operators=[]}=await api('/api/operators');
+  const operatorChoices=operators.map(operator=>`<button type="button" data-operator="${esc(operator.name)}"><b>${esc(operator.name)}</b><span>$${Number(operator.workerEarnings).toFixed(0)} when approved</span></button>`).join('');
   let selectedFiles=[];
   $('#content').innerHTML = `
     <div class="step-strip"><div class="step"><div class="step-num">1</div><span>Enter user details</span></div><div class="step"><div class="step-num">2</div><span>Add screenshots</span></div><div class="step"><div class="step-num">3</div><span>Submit for review</span></div></div>
@@ -236,7 +238,7 @@ function renderSubmit(){
       <div class="form-grid">
         <label>User full name<input name="customerName" autocomplete="name" placeholder="e.g. John Smith" required><span class="form-help">Name of the user you referred.</span></label>
         <label>Pickr website username<input name="pickrUsername" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="e.g. johnsmith23" required><span class="form-help">Enter their Pickr username exactly.</span></label>
-        <label>Operator<input name="operator" type="hidden" required><div class="operator-picker"><button id="operatorPicker" class="operator-picker-toggle" type="button" aria-expanded="false"><span>Select an operator</span><span>⌄</span></button><div id="operatorOptions" class="operator-options hidden"><button type="button" data-operator="Betway"><b>Betway</b><span>$40 when approved</span></button><button type="button" data-operator="ToonieBet"><b>ToonieBet</b><span>$40 when approved</span></button><button type="button" data-operator="OLG"><b>OLG</b><span>$50 when approved</span></button></div></div><span class="form-help">Choose the operator for this submission.</span></label>
+        <label>Operator<input name="operator" type="hidden" required><div class="operator-picker"><button id="operatorPicker" class="operator-picker-toggle" type="button" aria-expanded="false"><span>Select an operator</span><span>⌄</span></button><div id="operatorOptions" class="operator-options hidden">${operatorChoices}</div></div><span class="form-help">Choose the operator for this submission.</span></label>
         <label>Amount wagered<input name="amount" type="number" step="0.01" placeholder="e.g. 100.00" required><span class="form-help">Total amount the user wagered or bet.</span></label>
         <label>Signup date<input name="signupDate" type="date" required></label>
         <div class="full upload-field">
@@ -424,7 +426,8 @@ async function renderCommissions(){
   const isManager=state.user.role==='account_manager';
   const isAdmin=state.user.role==='admin';
   const title=isManager?'Team Earnings':isWorker?'My Earnings':'All Commissions';
-  const ratePanel = isWorker ? `<div class="panel"><div class="panel-header"><h3>Current approval payouts</h3><span class="muted" style="font-size:11px">Paid when a submission is approved</span></div><div class="panel-body"><div class="metric-row"><span><b>Betway</b></span><b>$40</b></div><div class="metric-row"><span><b>ToonieBet</b></span><b>$40</b></div><div class="metric-row"><span><b>OLG</b></span><b>$50</b></div></div></div>` : '';
+  const {operators=[]}=isWorker ? await api('/api/operators') : {};
+  const ratePanel = isWorker ? `<div class="panel"><div class="panel-header"><h3>Current approval payouts</h3><span class="muted" style="font-size:11px">Paid when a submission is approved</span></div><div class="panel-body">${operators.map(operator=>`<div class="metric-row"><span><b>${esc(operator.name)}</b></span><b>$${Number(operator.workerEarnings).toFixed(0)}</b></div>`).join('')}</div></div>` : '';
   const emptyDetails = `<div class="empty"><b>No commissions yet</b><p>Your earnings will appear here as soon as an eligible submission is approved.</p></div>`;
   $('#content').innerHTML=`
     <div class="welcome-row"><div><h2>${title}</h2><p class="muted">${isWorker?'See every approved submission, its fixed payout, and whether it is still awaiting payout.':isManager?'Track your team’s approved earnings and payout status.':'Review pending commissions and mark the monthly payout when it has been sent.'}</p></div>${isAdmin?`<button class="btn btn-primary" id="payPendingCommissions" ${totalPending?'':'disabled'}>Pay pending commissions · $${totalPending}</button>`:''}</div>
