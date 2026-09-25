@@ -265,6 +265,8 @@ html,body{font-family:"DM Sans",ui-sans-serif,system-ui,-apple-system,BlinkMacSy
 /* Final sidebar logo sizing: use the entire image rather than a cropped icon. */
 .sidebar .brand{align-items:center;gap:0}.sidebar-logo{width:170px;height:52px;object-fit:contain;object-position:center;border-radius:5px;background:#fff}.sidebar .brand>span:last-child{display:none}
 
+.operator-label{display:flex;align-items:center;gap:8px}.operator-logo{width:34px;height:24px;object-fit:contain;border-radius:4px;background:#fff}
+
 .user-mini span{color:#a9dcff;font-weight:700;letter-spacing:.025em}.logout-btn{display:inline-flex;align-items:center;gap:5px;padding:7px 9px;border:1px solid rgba(169,220,255,.35);border-radius:7px;color:#dff3ff;font-size:10px;font-weight:700;line-height:1;white-space:nowrap}.logout-btn span:first-child{font-size:15px;line-height:10px;transform:translateY(-1px)}.logout-btn:hover{background:rgba(169,220,255,.12);color:#fff}
 
 /* Keep the full Pickr logo visible when the mobile navigation drawer opens. */
