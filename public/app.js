@@ -66,7 +66,6 @@ function relTime(v){
 }
 
 const STATUS_TONES = { approved:'#16875b', pending:'#b26c00', needs_review:'#4f6df5', rejected:'#c63b4a' };
-const OPERATOR_LOGOS = { Atefia:'/atefia.png', X3Bet:'/x3bet.png', SpinFin:'/Spinfin.png' };
 
 // Pure SVG donut chart — animated on mount, no libraries.
 function donutChart(segments, centerValue, centerLabel){
@@ -230,7 +229,7 @@ async function renderDashboard(){
 async function renderSubmit(){
   if(!['affiliate','commission_worker','account_manager'].includes(state.user.role)) return navigate('dashboard');
   const {operators=[]}=await api('/api/operators');
-  const operatorChoices=operators.map(operator=>`<button type="button" data-operator="${esc(operator.name)}"><span class="operator-label">${OPERATOR_LOGOS[operator.name]?`<img class="operator-logo" src="${OPERATOR_LOGOS[operator.name]}" alt="">`:''}<b>${esc(operator.name)}</b></span><span>$${Number(operator.workerEarnings).toFixed(0)} when approved</span></button>`).join('');
+  const operatorChoices=operators.map(operator=>`<button type="button" data-operator="${esc(operator.name)}"><b>${esc(operator.name)}</b><span>$${Number(operator.workerEarnings).toFixed(0)} when approved</span></button>`).join('');
   let selectedFiles=[];
   $('#content').innerHTML = `
     <div class="step-strip"><div class="step"><div class="step-num">1</div><span>Enter user details</span></div><div class="step"><div class="step-num">2</div><span>Add screenshots</span></div><div class="step"><div class="step-num">3</div><span>Submit for review</span></div></div>
