@@ -30,8 +30,6 @@ button,input,select,textarea{font:inherit}.hidden{display:none!important}.muted{
 
 /* ============ Crafted UI layer: theme toggle, data-viz, chips, sorting, skeletons ============ */
 .top-actions{display:flex;align-items:center;gap:12px}
-.search-hint{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);font-weight:600}
-.search-hint kbd{font-family:inherit;background:var(--surface-2);border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;padding:2px 7px;font-size:10px;font-weight:800;color:var(--text)}
 .icon-toggle{width:38px;height:38px;border:1px solid var(--line);border-radius:11px;background:var(--surface);color:var(--text);cursor:pointer;display:grid;place-items:center;font-size:15px;transition:.18s;position:relative;overflow:hidden}
 .icon-toggle:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}
 .icon-toggle span{position:absolute;transition:transform .35s cubic-bezier(.2,.8,.2,1),opacity .25s}
@@ -85,7 +83,7 @@ th.sortable.sorted .arrow{opacity:1}
 @keyframes shimmer{100%{transform:translateX(100%)}}
 .count-up{font-variant-numeric:tabular-nums}
 .operator-picker{position:relative}.operator-picker-toggle{width:100%;display:flex;align-items:center;justify-content:space-between;border:1px solid var(--field-border);border-radius:12px;padding:13px 14px;background:var(--field-bg);color:var(--text);font-weight:600;cursor:pointer}.operator-picker-toggle:focus{outline:none;border-color:#91a2fc;box-shadow:0 0 0 4px rgba(79,109,245,.10)}.operator-options{position:absolute;z-index:5;top:calc(100% + 7px);left:0;right:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface);box-shadow:var(--shadow);padding:5px}.operator-options button{width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;border:0;border-radius:8px;padding:11px 10px;background:transparent;color:var(--text);cursor:pointer;text-align:left}.operator-options button:hover{background:#eef1ff}.operator-options button span{font-size:11px;color:var(--muted);white-space:nowrap}
-@media(max-width:980px){.viz-grid{grid-template-columns:1fr}.search-hint{display:none}.sk-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:980px){.viz-grid{grid-template-columns:1fr}.sk-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:560px){.donut-panel{flex-direction:column;text-align:center}.legend{width:100%}}
 
 /* ============ Dark theme surface refinements ============ */

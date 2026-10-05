@@ -39,6 +39,65 @@ function reportPeriod(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
+function isAccountingMonth(value) {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(String(value || ''));
+}
+
+// Keep the previous month active through day one. The default automatically
+// advances to the new calendar month on day two.
+function defaultAccountingMonth(date = new Date()) {
+  const effective = new Date(date);
+  if (effective.getDate() === 1) effective.setMonth(effective.getMonth() - 1);
+  return reportPeriod(effective);
+}
+
+function recordAccountingMonth(record, db = null) {
+  if (isAccountingMonth(record?.accountingMonth)) return record.accountingMonth;
+  if (record?.submissionId && db) {
+    const submission = (db.submissions || []).find(item => item.id === record.submissionId);
+    if (submission) return recordAccountingMonth(submission);
+  }
+  const date = new Date(record?.createdAt || Date.now());
+  return reportPeriod(Number.isNaN(date.getTime()) ? new Date() : date);
+}
+
+function ensureAccountingMonths(db, date = new Date()) {
+  db.accountingMonths = Array.isArray(db.accountingMonths) ? db.accountingMonths : [];
+  const months = new Set([
+    defaultAccountingMonth(date),
+    ...(db.submissions || []).map(item => recordAccountingMonth(item)),
+    ...(db.commissions || []).map(item => recordAccountingMonth(item, db))
+  ]);
+  let changed = false;
+  months.forEach(month => {
+    if (!db.accountingMonths.some(item => item.month === month)) {
+      db.accountingMonths.push({ month, status: 'open', openedAt: now(), closedAt: null, closedBy: null });
+      changed = true;
+    }
+  });
+  db.accountingMonths.sort((a, b) => b.month.localeCompare(a.month));
+  return changed;
+}
+
+function monthSummary(db, period) {
+  const submissions = (db.submissions || []).filter(item => recordAccountingMonth(item) === period.month);
+  const commissions = (db.commissions || []).filter(item => recordAccountingMonth(item, db) === period.month);
+  const unresolvedSubmissions = submissions.filter(item => item.status === 'pending' || item.status === 'needs_review').length;
+  const pendingCommissions = commissions.filter(item => item.status !== 'paid').length;
+  const unpaidReimbursements = submissions.filter(item => item.status === 'approved' && Number(item.amount || item.reimbursement?.amount || 0) > 0 && item.reimbursement?.status !== 'paid').length;
+  return {
+    ...period,
+    submissions: submissions.length,
+    approved: submissions.filter(item => item.status === 'approved').length,
+    pendingCommissions,
+    unpaidReimbursements,
+    unresolvedSubmissions,
+    commissionTotal: commissions.reduce((total, item) => total + Number(item.amount || 0), 0),
+    reimbursementTotal: submissions.reduce((total, item) => total + Number(item.reimbursement?.amount || item.amount || 0), 0),
+    readyToClose: pendingCommissions === 0 && unpaidReimbursements === 0 && unresolvedSubmissions === 0
+  };
+}
+
 function isLastDayOfMonth(date = new Date()) {
   const tomorrow = new Date(date);
   tomorrow.setDate(date.getDate() + 1);
@@ -198,6 +257,7 @@ async function applyAdminConfig() {
   if (!email) return;
 
   const db = await loadDb();
+  if (ensureAccountingMonths(db)) await saveDb(db);
   let changed = false;
 
   const existing = db.users.find(u => u.email.toLowerCase() === email);
@@ -440,6 +500,7 @@ function submissionView(s, db) {
   const reviewer = db.users.find(u => u.id === s.reviewedBy);
   return {
     ...s,
+    accountingMonth: recordAccountingMonth(s),
     customerName: s.customerName || '',
     pickrUsername: s.pickrUsername || s.externalUserId || '',
     attachments: (s.attachments || []).map(a => ({
@@ -466,6 +527,7 @@ async function api(req, res, url) {
   }
 
   const db = await loadDb();
+  if (ensureAccountingMonths(db)) await saveDb(db);
 
   if (req.method === 'POST' && url.pathname === '/api/login') {
     const body = await readBody(req);
@@ -505,6 +567,8 @@ async function api(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/dashboard') {
     const user = requireUser(req, res, db);
     if (!user) return;
+    const requestedMonth = normalize(url.searchParams.get('month'));
+    const accountingMonth = isAccountingMonth(requestedMonth) ? requestedMonth : defaultAccountingMonth();
     let scoped;
     if (user.role === 'admin') {
       scoped = db.submissions;
@@ -514,6 +578,7 @@ async function api(req, res, url) {
     } else {
       scoped = db.submissions.filter(s => s.affiliateId === user.id);
     }
+    scoped = scoped.filter(s => recordAccountingMonth(s) === accountingMonth);
     const counts = {
       total: scoped.length,
       pending: scoped.filter(s => s.status === 'pending').length,
@@ -525,7 +590,7 @@ async function api(req, res, url) {
     let byAffiliate = [];
     if (user.role === 'admin') {
       byAffiliate = db.users.filter(u => u.role === 'affiliate' || u.role === 'commission_worker').map(a => {
-        const rows = db.submissions.filter(s => s.affiliateId === a.id);
+        const rows = db.submissions.filter(s => s.affiliateId === a.id && recordAccountingMonth(s) === accountingMonth);
         return {
           id: a.id, name: a.name, email: a.email, active: a.active,
           total: rows.length,
@@ -537,7 +602,7 @@ async function api(req, res, url) {
     } else if (user.role === 'account_manager') {
       const teamWorkers = db.users.filter(u => u.managedBy === user.id);
       byAffiliate = teamWorkers.map(a => {
-        const rows = db.submissions.filter(s => s.affiliateId === a.id);
+        const rows = db.submissions.filter(s => s.affiliateId === a.id && recordAccountingMonth(s) === accountingMonth);
         return {
           id: a.id, name: a.name, email: a.email, active: a.active,
           total: rows.length,
@@ -547,7 +612,76 @@ async function api(req, res, url) {
         };
       }).sort((a,b) => b.approved - a.approved);
     }
-    return sendJson(res, 200, { counts, recent, byAffiliate });
+    return sendJson(res, 200, { counts, recent, byAffiliate, accountingMonth });
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/accounting/months') {
+    const user = requireUser(req, res, db);
+    if (!user) return;
+    const periods = db.accountingMonths.map(period => monthSummary(db, period));
+    const availableMonths = periods.filter(period => period.status === 'open');
+    return sendJson(res, 200, {
+      defaultMonth: defaultAccountingMonth(),
+      periods: user.role === 'admin' ? periods : availableMonths,
+      availableMonths
+    });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/accounting/months') {
+    const user = requireUser(req, res, db, 'admin');
+    if (!user) return;
+    const body = await readBody(req);
+    const month = normalize(body.month);
+    if (!isAccountingMonth(month)) return sendJson(res, 400, { error: 'Choose a valid month.' });
+    let period = db.accountingMonths.find(item => item.month === month);
+    if (period?.status === 'open') return sendJson(res, 409, { error: 'That month is already open.' });
+    if (period) {
+      period.status = 'open';
+      period.openedAt = now();
+      period.closedAt = null;
+      period.closedBy = null;
+    } else {
+      period = { month, status: 'open', openedAt: now(), closedAt: null, closedBy: null };
+      db.accountingMonths.push(period);
+      db.accountingMonths.sort((a, b) => b.month.localeCompare(a.month));
+    }
+    audit(db, user.id, 'accounting.month_opened', { month });
+    await saveDb(db);
+    return sendJson(res, 201, { period: monthSummary(db, period) });
+  }
+
+  const accountingMonthMatch = url.pathname.match(/^\/api\/accounting\/months\/(\d{4}-(?:0[1-9]|1[0-2]))$/);
+  if (req.method === 'PATCH' && accountingMonthMatch) {
+    const user = requireUser(req, res, db, 'admin');
+    if (!user) return;
+    const month = accountingMonthMatch[1];
+    const period = db.accountingMonths.find(item => item.month === month);
+    if (!period) return sendJson(res, 404, { error: 'Month not found.' });
+    const body = await readBody(req);
+    const action = normalize(body.action);
+    if (action === 'close') {
+      const summary = monthSummary(db, period);
+      if (!summary.readyToClose) {
+        return sendJson(res, 409, {
+          error: `This month cannot close yet: ${summary.unresolvedSubmissions} awaiting review, ${summary.pendingCommissions} unpaid commission(s), and ${summary.unpaidReimbursements} reimbursement(s) remain.`,
+          period: summary
+        });
+      }
+      period.status = 'closed';
+      period.closedAt = now();
+      period.closedBy = user.id;
+      audit(db, user.id, 'accounting.month_closed', { month, submissions: summary.submissions, commissionTotal: summary.commissionTotal, reimbursementTotal: summary.reimbursementTotal });
+    } else if (action === 'reopen') {
+      period.status = 'open';
+      period.openedAt = now();
+      period.closedAt = null;
+      period.closedBy = null;
+      audit(db, user.id, 'accounting.month_reopened', { month });
+    } else {
+      return sendJson(res, 400, { error: 'Choose close or reopen.' });
+    }
+    await saveDb(db);
+    return sendJson(res, 200, { period: monthSummary(db, period) });
   }
 
   if (req.method === 'GET' && url.pathname === '/api/submissions') {
@@ -566,6 +700,8 @@ async function api(req, res, url) {
     }
     const status = normalize(url.searchParams.get('status'));
     const q = normalize(url.searchParams.get('q')).toLowerCase();
+    const month = normalize(url.searchParams.get('month'));
+    if (isAccountingMonth(month)) rows = rows.filter(s => recordAccountingMonth(s) === month);
     if (status && status !== 'all') rows = rows.filter(s => s.status === status);
     if (q) rows = rows.filter(s => [s.customerName, s.pickrUsername, s.externalUserId, s.operator, s.notes].join(' ').toLowerCase().includes(q));
     rows = [...rows].sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(s => submissionView(s, db));
@@ -596,12 +732,16 @@ async function api(req, res, url) {
     const customerName = normalize(fields.customerName).slice(0, 120);
     const pickrUsername = normalize(fields.pickrUsername).slice(0, 120);
     const operator = normalize(fields.operator).slice(0, 120);
+    const accountingMonth = normalize(fields.accountingMonth);
     const signupDate = normalize(fields.signupDate).slice(0, 20);
     const notes = normalize(fields.notes).slice(0, 1200);
 
     if (!customerName || !pickrUsername || !operator || !signupDate) {
       return sendJson(res, 400, { error: 'User name, Pickr username, operator, and signup date are required.' });
     }
+    if (!isAccountingMonth(accountingMonth)) return sendJson(res, 400, { error: 'Choose a valid submission month.' });
+    const accountingPeriod = db.accountingMonths.find(item => item.month === accountingMonth);
+    if (!accountingPeriod || accountingPeriod.status !== 'open') return sendJson(res, 409, { error: 'That month is closed. Ask the owner to reopen it first.' });
     const availableRates = availableOperatorRates(db, user);
     if (!Object.prototype.hasOwnProperty.call(availableRates, operator)) {
       return sendJson(res, 400, { error: 'Choose one of the available operators.' });
@@ -643,6 +783,7 @@ async function api(req, res, url) {
       pickrUsername,
       operator,
       amount: parseFloat(fields.amount) || 0,
+      accountingMonth,
       reimbursement: { status: 'unpaid', amount: parseFloat(fields.amount) || 0, paidAt: null, paidBy: null },
       signupDate,
       notes,
@@ -659,7 +800,7 @@ async function api(req, res, url) {
       ]
     };
     db.submissions.unshift(record);
-    audit(db, user.id, 'submission.created', { submissionId: record.id, operator, pickrUsername, files: attachments.length });
+    audit(db, user.id, 'submission.created', { submissionId: record.id, operator, pickrUsername, accountingMonth, files: attachments.length });
     await saveDb(db);
     return sendJson(res, 201, { submission: submissionView(record, db) });
   }
@@ -691,6 +832,8 @@ async function api(req, res, url) {
     if (!user) return;
     const record = db.submissions.find(s => s.id === statusMatch[1]);
     if (!record) return sendJson(res, 404, { error: 'Submission not found.' });
+    const accountingPeriod = db.accountingMonths.find(item => item.month === recordAccountingMonth(record));
+    if (accountingPeriod?.status === 'closed') return sendJson(res, 409, { error: 'This month is closed. Reopen it before changing this submission.' });
     const body = await readBody(req);
     const status = normalize(body.status);
     const allowed = new Set(['pending', 'approved', 'rejected', 'needs_review']);
@@ -725,6 +868,7 @@ async function api(req, res, url) {
             userRole: submittingUser?.role || 'commission_worker',
             operator: operator,
             amount: workerEarnings,
+            accountingMonth: recordAccountingMonth(record),
             status: 'pending',
             createdAt: record.updatedAt,
             paidAt: null,
@@ -742,6 +886,7 @@ async function api(req, res, url) {
             userRole: 'account_manager',
             operator: operator,
             amount: managerEarnings,
+            accountingMonth: recordAccountingMonth(record),
             status: 'pending',
             createdAt: record.updatedAt,
             paidAt: null,
@@ -762,6 +907,8 @@ async function api(req, res, url) {
     if (!user) return;
     const record = db.submissions.find(s => s.id === reimbursementMatch[1]);
     if (!record) return sendJson(res, 404, { error: 'Submission not found.' });
+    const accountingPeriod = db.accountingMonths.find(item => item.month === recordAccountingMonth(record));
+    if (accountingPeriod?.status === 'closed') return sendJson(res, 409, { error: 'This month is closed. Reopen it before changing reimbursements.' });
     const amount = Number(record.amount || 0);
     if (record.status !== 'approved') return sendJson(res, 400, { error: 'Approve this submission before reimbursing its deposit.' });
     if (amount <= 0) return sendJson(res, 400, { error: 'This submission does not have a reimbursable deposit amount.' });
@@ -850,6 +997,8 @@ async function api(req, res, url) {
       }));
     }
     
+    const month = normalize(url.searchParams.get('month'));
+    if (isAccountingMonth(month)) commissions = commissions.filter(c => recordAccountingMonth(c, db) === month);
     return sendJson(res, 200, { commissions });
   }
 
@@ -868,6 +1017,8 @@ async function api(req, res, url) {
     } else if (user.role === 'commission_worker') {
       relevantCommissions = db.commissions.filter(c => c.userId === user.id);
     }
+    const month = normalize(url.searchParams.get('month'));
+    if (isAccountingMonth(month)) relevantCommissions = relevantCommissions.filter(c => recordAccountingMonth(c, db) === month);
     
     const summary = {
       totalEarned: 0,
@@ -906,7 +1057,12 @@ async function api(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/commissions/pay-pending') {
     const user = requireUser(req, res, db, 'admin');
     if (!user) return;
-    const payable = (db.commissions || []).filter(c => c.status === 'pending');
+    const body = await readBody(req);
+    const month = normalize(body.month);
+    if (!isAccountingMonth(month)) return sendJson(res, 400, { error: 'Choose a valid payout month.' });
+    const accountingPeriod = db.accountingMonths.find(item => item.month === month);
+    if (!accountingPeriod || accountingPeriod.status === 'closed') return sendJson(res, 409, { error: 'That month is closed.' });
+    const payable = (db.commissions || []).filter(c => c.status === 'pending' && recordAccountingMonth(c, db) === month);
     if (!payable.length) return sendJson(res, 400, { error: 'There are no pending commissions to pay.' });
     const paidAt = now();
     const batchId = id('pay_');
@@ -918,7 +1074,7 @@ async function api(req, res, url) {
       commission.payoutBatchId = batchId;
       total += Number(commission.amount || 0);
     });
-    audit(db, user.id, 'commission.monthly_payout', { batchId, records: payable.length, total });
+    audit(db, user.id, 'commission.monthly_payout', { month, batchId, records: payable.length, total });
     await saveDb(db);
     return sendJson(res, 200, { batchId, records: payable.length, total, paidAt });
   }

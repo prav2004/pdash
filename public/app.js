@@ -1,7 +1,7 @@
 const $ = (s, root=document) => root.querySelector(s);
 const $$ = (s, root=document) => [...root.querySelectorAll(s)];
 
-const state = { user:null, page:'dashboard', submissions:[], affiliates:[] };
+const state = { user:null, page:'dashboard', submissions:[], affiliates:[], accountingMonths:[], availableMonths:[], selectedMonth:null };
 
 const api = async (url, options={}) => {
   const headers = {...(options.headers||{})};
@@ -49,6 +49,20 @@ function toast(message, error=false){
 function esc(v='') { return String(v).replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
 function fmtDate(v){ if(!v)return '—'; const d=new Date(v); return Number.isNaN(d.getTime())?esc(v):d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}); }
 function fmtDateTime(v){ if(!v)return '—'; return new Date(v).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }
+function monthLabel(value){
+  const match=String(value||'').match(/^(\d{4})-(\d{2})$/);
+  if(!match) return value||'—';
+  return new Date(Number(match[1]),Number(match[2])-1,1).toLocaleDateString(undefined,{month:'long',year:'numeric'});
+}
+async function loadAccountingMonths(){
+  const data=await api('/api/accounting/months');
+  state.accountingMonths=data.periods||[];
+  state.availableMonths=data.availableMonths||[];
+  if(!state.selectedMonth || !state.accountingMonths.some(item=>item.month===state.selectedMonth)) {
+    state.selectedMonth=data.defaultMonth || state.availableMonths[0]?.month || state.accountingMonths[0]?.month;
+  }
+  return data;
+}
 function statusLabel(s){ return ({needs_review:'Needs review',pending:'Pending',approved:'Approved',rejected:'Rejected'})[s] || s; }
 function statusPill(s){ return `<span class="status status-${esc(s)}">${esc(statusLabel(s))}</span>`; }
 function fmtBytes(n){ const v=Number(n||0); if(v<1024)return `${v} B`; if(v<1048576)return `${(v/1024).toFixed(1)} KB`; return `${(v/1048576).toFixed(1)} MB`; }
@@ -120,7 +134,7 @@ function skeleton(){
 function navItems(){
   if (state.user.role === 'admin') {
     return [
-      ['MAIN'],['dashboard','▦','Dashboard'],['submissions','☷','All submissions'],['commissions','💰','Commission payouts'],['affiliates','◎','Affiliates'],['audit','↻','Activity log']
+      ['MAIN'],['dashboard','▦','Dashboard'],['submissions','☷','All submissions'],['commissions','💰','Commission payouts'],['months','◫','Monthly close'],['affiliates','◎','Affiliates'],['audit','↻','Activity log']
     ];
   } else if (state.user.role === 'account_manager') {
     return [
@@ -147,7 +161,7 @@ function renderNav(){
 
 const titles = {
   dashboard:['OVERVIEW','Dashboard'], submit:['WORKFLOW','Submit new user'], submissions:['RECORDS','Submissions'],
-  affiliates:['MANAGEMENT','Affiliates'], audit:['SECURITY','Activity log'], commissions:['EARNINGS','Commissions']
+  affiliates:['MANAGEMENT','Affiliates'], audit:['SECURITY','Activity log'], commissions:['EARNINGS','Commissions'], months:['ACCOUNTING','Monthly close']
 };
 
 async function navigate(page){
@@ -164,6 +178,7 @@ async function navigate(page){
     if(page==='affiliates') await renderAffiliates();
     if(page==='audit') await renderAudit();
     if(page==='commissions') await renderCommissions();
+    if(page==='months') await renderMonths();
   } catch(e){
     toast(e.message,true);
     $('#content').innerHTML = `<div class="panel"><div class="empty"><b>Unable to load this page</b><p>${esc(e.message || 'Please try again.')}</p><button class="btn btn-primary" id="retryPage">Try again</button></div></div>`;
@@ -174,17 +189,20 @@ async function navigate(page){
 function bootUser(user){
   state.user=user;
   $('#loginView').classList.add('hidden'); $('#appView').classList.remove('hidden');
-  const sidebarRole = ['worker', 'affiliate', 'commission_worker', 'commission worker'].includes(String(user.role).toLowerCase()) ? '✦ Sales' : user.role;
+  const isSalesWorker = ['worker', 'affiliate', 'commission_worker', 'commission worker'].includes(String(user.role).toLowerCase());
+  const sidebarRole = isSalesWorker ? '✦ Sales Associate' : user.role;
   $('#sideName').textContent=user.name; $('#sideRole').textContent=sidebarRole; $('#sideAvatar').textContent=user.name[0]?.toUpperCase()||'A';
-  $('#roleBadge').textContent=user.role;
+  $('#roleBadge').textContent=isSalesWorker?'Sales Associate':user.role;
   state.page='dashboard'; renderNav(); navigate('dashboard');
   initTheme();
 }
 
 async function renderDashboard(){
+  await loadAccountingMonths();
+  const month=state.selectedMonth;
   const [{counts,recent,byAffiliate},{submissions}] = await Promise.all([
-    api('/api/dashboard'),
-    api('/api/submissions').catch(()=>({submissions:[]}))
+    api(`/api/dashboard?month=${encodeURIComponent(month)}`),
+    api(`/api/submissions?month=${encodeURIComponent(month)}`).catch(()=>({submissions:[]}))
   ]);
   const content = $('#content');
   const first = esc(state.user.name.split(' ')[0]);
@@ -208,7 +226,7 @@ async function renderDashboard(){
     <div class="panel"><div class="panel-header"><h3>Submission activity</h3><span class="muted" style="font-size:11px">${trend.total} in last 14 days</span></div><div class="trend-panel">${trend.html}</div></div>
   </div>`;
   content.innerHTML = `
-    <div class="welcome-row"><div><h2>${state.user.role==='admin'?'Operations overview':`Hi, ${first}`}</h2><p class="muted">${state.user.role==='admin'?'Review affiliate activity and keep every submission accountable.':'Submit each referred user here and track the review status.'}</p></div>${state.user.role==='affiliate'?'<button class="btn btn-primary" id="dashSubmit">+ Submit new user</button>':''}</div>
+    <div class="welcome-row"><div><h2>${state.user.role==='admin'?'Operations overview':`Hi, ${first}`}</h2><p class="muted">${monthLabel(month)} · ${state.user.role==='admin'?'Review affiliate activity and keep every submission accountable.':'Submit each referred user here and track the review status.'}</p></div>${state.user.role==='affiliate'?'<button class="btn btn-primary" id="dashSubmit">+ Submit new user</button>':''}</div>
     <div class="stat-grid">${stats.map(s=>`<div class="stat-card ${s[4]}"><div class="stat-icon">${s[3]}</div><div class="stat-body"><div class="stat-label">${s[0]}</div><div class="stat-value count-up" data-count="${s[1]}">0</div><div class="stat-sub">${s[2]}</div></div></div>`).join('')}</div>
     ${vizGrid}
     <div class="panel-grid">
@@ -228,7 +246,9 @@ async function renderDashboard(){
 
 async function renderSubmit(){
   if(!['affiliate','commission_worker','account_manager'].includes(state.user.role)) return navigate('dashboard');
-  const {operators=[]}=await api('/api/operators');
+  const [{operators=[]}]=await Promise.all([api('/api/operators'),loadAccountingMonths()]);
+  const selectableMonths=state.availableMonths;
+  const defaultMonth=selectableMonths.some(item=>item.month===state.selectedMonth)?state.selectedMonth:selectableMonths[0]?.month;
   const operatorChoices=operators.map(operator=>`<button type="button" data-operator="${esc(operator.name)}"><b>${esc(operator.name)}</b><span>$${Number(operator.workerEarnings).toFixed(0)} when approved</span></button>`).join('');
   let selectedFiles=[];
   $('#content').innerHTML = `
@@ -241,6 +261,7 @@ async function renderSubmit(){
         <label>Operator<input name="operator" type="hidden" required><div class="operator-picker"><button id="operatorPicker" class="operator-picker-toggle" type="button" aria-expanded="false"><span>Select an operator</span><span>⌄</span></button><div id="operatorOptions" class="operator-options hidden">${operatorChoices}</div></div><span class="form-help">Choose the operator for this submission.</span></label>
         <label>Amount wagered<input name="amount" type="number" step="0.01" placeholder="e.g. 100.00" required><span class="form-help">Total amount the user wagered or bet.</span></label>
         <label>Signup date<input name="signupDate" type="date" required></label>
+        <label>Submission month<select name="accountingMonth" required>${selectableMonths.map(item=>`<option value="${item.month}" ${item.month===defaultMonth?'selected':''}>${esc(monthLabel(item.month))}</option>`).join('')}</select><span class="form-help">The month this person belongs to. Closed months are unavailable.</span></label>
         <div class="full upload-field">
           <div class="upload-label">Screenshots / proof <span>Optional · up to 5 files</span></div>
           <input id="proofFiles" type="file" multiple accept="image/*,.heic,.heif,.avif,.pdf,application/pdf" hidden>
@@ -300,6 +321,7 @@ async function renderSubmit(){
     data.append('customerName',form.customerName.value);
     data.append('pickrUsername',form.pickrUsername.value);
     data.append('operator',form.operator.value);
+    data.append('accountingMonth',form.accountingMonth.value);
     data.append('amount',form.amount.value);
     data.append('signupDate',form.signupDate.value);
     data.append('notes',form.notes.value);
@@ -313,7 +335,9 @@ async function renderSubmit(){
 }
 
 async function renderSubmissions(){
-  const {submissions}=await api('/api/submissions'); state.submissions=submissions;
+  await loadAccountingMonths();
+  const month=state.selectedMonth;
+  const {submissions}=await api(`/api/submissions?month=${encodeURIComponent(month)}`); state.submissions=submissions;
   const isAdmin=state.user.role==='admin';
   const statuses=[['all','All'],['pending','Pending'],['approved','Approved'],['needs_review','Needs review'],['rejected','Rejected']];
   const chipCount=st=> st==='all'?submissions.length:submissions.filter(s=>s.status===st).length;
@@ -325,9 +349,10 @@ async function renderSubmissions(){
   const cols=[['customerName','User'],['pickr','Pickr username'],['operator','Operator'],...(isAdmin?[['affiliateName','Affiliate']]:[]),['signupDate','Signup date'],['files','Files'],['createdAt','Submitted'],['status','Status']];
   const view={ q:'', status:'all', sort:'createdAt', dir:-1 };
   $('#content').innerHTML = `
-    <div class="welcome-row"><div><h2>${isAdmin?'All submissions':'My submissions'}</h2><p class="muted">${isAdmin?'Review every affiliate record and its uploaded proof from one place.':'Track everything you have submitted and its current review status.'}</p></div>${!isAdmin?'<button class="btn btn-primary" id="newFromList">+ Submit new user</button>':''}</div>
+    <div class="welcome-row"><div><h2>${isAdmin?'All submissions':'My submissions'}</h2><p class="muted">${isAdmin?'Review every affiliate record and its uploaded proof from one place.':'Track everything you have submitted and its current review status.'}</p></div><div class="toolbar"><select id="submissionMonth" class="filter-input">${state.accountingMonths.map(item=>`<option value="${item.month}" ${item.month===month?'selected':''}>${esc(monthLabel(item.month))}${item.status==='closed'?' · Closed':''}</option>`).join('')}</select>${!isAdmin?'<button class="btn btn-primary" id="newFromList">+ Submit new user</button>':''}</div></div>
     <div class="panel"><div class="panel-header" style="flex-wrap:wrap"><div class="chips" id="statusChips">${statuses.map(([v,l])=>`<button class="chip ${v==='all'?'active':''}" data-chip="${v}">${l}<span class="chip-count">${chipCount(v)}</span></button>`).join('')}</div><div class="toolbar"><input id="searchRows" class="filter-input" placeholder="Search name, username, operator"></div></div><div id="submissionTable"></div></div>`;
   $('#newFromList') && ($('#newFromList').onclick=()=>navigate('submit'));
+  $('#submissionMonth').onchange=e=>{state.selectedMonth=e.target.value;renderSubmissions();};
   const draw=()=>{
     const q=view.q.toLowerCase().trim();
     let rows=submissions.filter(s=>(view.status==='all'||s.status===view.status)&&(!q||[s.customerName,submissionUser(s),s.operator,s.affiliateName].join(' ').toLowerCase().includes(q)));
@@ -359,6 +384,7 @@ function openSubmission(id, list=state.submissions){
     <div class="detail-grid">
       <div class="detail-item"><small>Pickr username</small><b>@${esc(submissionUser(s))}</b></div><div class="detail-item"><small>Operator</small><b>${esc(s.operator)}</b></div>
       <div class="detail-item"><small>Signup date</small><b>${fmtDate(s.signupDate)}</b></div>${isAdmin?`<div class="detail-item"><small>Submitted by affiliate</small><b>${esc(s.affiliateName)}</b></div>`:''}
+      <div class="detail-item"><small>Submission month</small><b>${esc(monthLabel(s.accountingMonth || String(s.createdAt||'').slice(0,7)))}</b></div>
       <div class="detail-item"><small>Deposit / wagered amount</small><b>$${Number(s.amount||0).toFixed(2)}</b></div><div class="detail-item"><small>Deposit reimbursement</small><b>${reimbursement.status==='paid'?`Paid ${fmtDate(reimbursement.paidAt)}`:'Not reimbursed'}</b></div>
       <div class="detail-item"><small>Submitted</small><b>${fmtDateTime(s.createdAt)}</b></div><div class="detail-item"><small>Uploaded files</small><b>${(s.attachments||[]).length} / 5</b></div>
       <div class="detail-item" style="grid-column:1/-1"><small>Affiliate notes</small><b>${esc(s.notes||'—')}</b></div>
@@ -418,9 +444,42 @@ async function renderAudit(){
   $('#content').innerHTML=`<div class="welcome-row"><div><h2>Activity log</h2><p class="muted">Recent security and workflow actions across the portal.</p></div></div><div class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Details</th></tr></thead><tbody>${audit.map(a=>`<tr><td>${fmtDateTime(a.at)}</td><td>${esc(a.actorName)}</td><td class="mono">${esc(a.type)}</td><td>${esc(Object.entries(a.meta||{}).map(([k,v])=>`${k}: ${v}`).join(' · '))}</td></tr>`).join('')}</tbody></table></div></div>`;
 }
 
+async function renderMonths(){
+  if(state.user.role!=='admin') return navigate('dashboard');
+  await loadAccountingMonths();
+  const rows=state.accountingMonths;
+  $('#content').innerHTML=`
+    <div class="welcome-row"><div><h2>Monthly accounting</h2><p class="muted">The active month switches automatically on the second day. Close a month after every user is reviewed, commissions are paid, and deposits are reimbursed.</p></div><div class="toolbar"><input id="openMonthValue" class="filter-input" type="month" aria-label="Month to open"><button class="btn btn-soft" id="openMonth">Open month</button></div></div>
+    <div class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Month</th><th>Submissions</th><th>Commissions</th><th>Reimbursements</th><th>Status</th><th></th></tr></thead><tbody>${rows.map(period=>`<tr><td><b>${esc(monthLabel(period.month))}</b>${period.month===state.selectedMonth?'<div class="muted">Currently selected</div>':''}</td><td>${period.submissions}<div class="muted">${period.unresolvedSubmissions} awaiting review</div></td><td>$${Number(period.commissionTotal||0).toFixed(2)}<div class="muted">${period.pendingCommissions} unpaid</div></td><td>$${Number(period.reimbursementTotal||0).toFixed(2)}<div class="muted">${period.unpaidReimbursements} unpaid</div></td><td><span class="status ${period.status==='closed'?'status-inactive':'status-approved'}">${period.status}</span></td><td>${period.status==='closed'?`<button class="btn btn-soft small-btn" data-month-action="reopen" data-month="${period.month}">Reopen month</button>`:`<button class="btn ${period.readyToClose?'btn-primary':'btn-soft'} small-btn" data-month-action="close" data-month="${period.month}" ${period.readyToClose?'':'disabled'}>${period.readyToClose?'Close month':'Finish outstanding items'}</button>`}</td></tr>`).join('')}</tbody></table></div></div>`;
+  $$('[data-month-action]').forEach(button=>button.onclick=async()=>{
+    const action=button.dataset.monthAction;
+    const month=button.dataset.month;
+    if(!confirm(`${action==='close'?'Close':'Reopen'} ${monthLabel(month)}?`)) return;
+    try{
+      await api(`/api/accounting/months/${encodeURIComponent(month)}`,{method:'PATCH',body:JSON.stringify({action})});
+      toast(`${monthLabel(month)} ${action==='close'?'closed':'reopened'}.`);
+      await renderMonths();
+    }catch(error){toast(error.message,true);}
+  });
+  $('#openMonth').onclick=async()=>{
+    const month=$('#openMonthValue').value;
+    if(!month){toast('Choose a month to open.',true);return;}
+    try{
+      await api('/api/accounting/months',{method:'POST',body:JSON.stringify({month})});
+      toast(`${monthLabel(month)} is open for submissions.`);
+      state.selectedMonth=month;
+      await renderMonths();
+    }catch(error){toast(error.message,true);}
+  };
+}
+
 async function renderCommissions(){
-  const {commissions}=await api('/api/commissions');
-  const {summary={}}=await api('/api/commissions/summary');
+  await loadAccountingMonths();
+  const month=state.selectedMonth;
+  const [{commissions},{summary={}}]=await Promise.all([
+    api(`/api/commissions?month=${encodeURIComponent(month)}`),
+    api(`/api/commissions/summary?month=${encodeURIComponent(month)}`)
+  ]);
   const {totalEarned=0,totalPending=0,totalPaid=0,byOperator={}}=summary;
   const isWorker=state.user.role==='commission_worker';
   const isManager=state.user.role==='account_manager';
@@ -430,7 +489,7 @@ async function renderCommissions(){
   const ratePanel = isWorker ? `<div class="panel"><div class="panel-header"><h3>Current approval payouts</h3><span class="muted" style="font-size:11px">Paid when a submission is approved</span></div><div class="panel-body">${operators.map(operator=>`<div class="metric-row"><span><b>${esc(operator.name)}</b></span><b>$${Number(operator.workerEarnings).toFixed(0)}</b></div>`).join('')}</div></div>` : '';
   const emptyDetails = `<div class="empty"><b>No commissions yet</b><p>Your earnings will appear here as soon as an eligible submission is approved.</p></div>`;
   $('#content').innerHTML=`
-    <div class="welcome-row"><div><h2>${title}</h2><p class="muted">${isWorker?'See every approved submission, its fixed payout, and whether it is still awaiting payout.':isManager?'Track your team’s approved earnings and payout status.':'Review pending commissions and mark the monthly payout when it has been sent.'}</p></div>${isAdmin?`<button class="btn btn-primary" id="payPendingCommissions" ${totalPending?'':'disabled'}>Pay pending commissions · $${totalPending}</button>`:''}</div>
+    <div class="welcome-row"><div><h2>${title}</h2><p class="muted">${isWorker?'See every approved submission, its fixed payout, and whether it is still awaiting payout.':isManager?'Track your team’s approved earnings and payout status.':'Review pending commissions and mark the monthly payout when it has been sent.'}</p></div><div class="toolbar"><select id="commissionMonth" class="filter-input">${state.accountingMonths.map(item=>`<option value="${item.month}" ${item.month===month?'selected':''}>${esc(monthLabel(item.month))}${item.status==='closed'?' · Closed':''}</option>`).join('')}</select>${isAdmin?`<button class="btn btn-primary" id="payPendingCommissions" ${totalPending?'':'disabled'}>Pay ${esc(monthLabel(month))} · $${totalPending}</button>`:''}</div></div>
     <div class="stat-grid">
       <div class="stat-card tone-green"><div class="stat-icon">✓</div><div class="stat-body"><div class="stat-label">Total earned</div><div class="stat-value">$<span class="count-up" data-count="${totalEarned}">0</span></div><div class="stat-sub">All approved earnings</div></div></div>
       <div class="stat-card tone-amber"><div class="stat-icon">◷</div><div class="stat-body"><div class="stat-label">Awaiting payout</div><div class="stat-value">$<span class="count-up" data-count="${totalPending}">0</span></div><div class="stat-sub">Approved and not yet paid</div></div></div>
@@ -439,10 +498,11 @@ async function renderCommissions(){
     <div class="panel-grid"><div class="panel"><div class="panel-header"><h3>Breakdown by operator</h3></div><div class="panel-body">${Object.entries(byOperator).length ? Object.entries(byOperator).map(([op, stats]) => `<div class="metric-row"><span><b>${esc(op)}</b><small class="muted">${stats.count} approved submission${stats.count===1?'':'s'}</small></span><span><b>$${stats.total}</b><small class="muted">${stats.pending ? `$${stats.pending} pending` : 'Paid'}</small></span></div>`).join('') : '<div class="empty">No commission data</div>'}</div></div>${ratePanel || `<div class="panel"><div class="panel-header"><h3>Payout status</h3></div><div class="panel-body"><p class="muted" style="margin:0;font-size:12px">Commission records are created automatically when an eligible submission is approved.</p></div></div>`}</div>
     <div class="panel"><div class="panel-header"><h3>Commission details</h3><span class="muted" style="font-size:11px">${commissions.length} record${commissions.length===1?'':'s'}</span></div>${commissions.length?`<div class="table-wrap"><table class="data-table"><thead><tr><th>Approved</th><th>Operator</th>${isManager?'<th>Worker</th>':''}<th>Payout</th><th>Status</th></tr></thead><tbody>${commissions.map(c=>`<tr><td>${fmtDate(c.createdAt)}</td><td><b>${esc(c.operator)}</b><div class="muted mono">#${esc(c.submissionId || '').slice(-6)}</div></td>${isManager?`<td>${esc(c.userName)}</td>`:''}<td><b>$${c.amount}</b></td><td>${statusPill(c.status)}</td></tr>`).join('')}</tbody></table></div>`:emptyDetails}</div>`;
   runCounters($('#content'));
+  $('#commissionMonth').onchange=e=>{state.selectedMonth=e.target.value;renderCommissions();};
   $('#payPendingCommissions') && ($('#payPendingCommissions').onclick=async()=>{
     if (!confirm(`Mark ${commissions.filter(c=>c.status==='pending').length} pending commission record(s) as paid for a total of $${totalPending}?`)) return;
     try {
-      const result=await api('/api/commissions/pay-pending',{method:'POST'});
+      const result=await api('/api/commissions/pay-pending',{method:'POST',body:JSON.stringify({month})});
       toast(`Marked ${result.records} commission record(s) paid: $${result.total}.`);
       await renderCommissions();
     } catch (error) { toast(error.message,true); }
@@ -456,10 +516,6 @@ $('#logoutBtn').onclick=async()=>{try{await api('/api/logout',{method:'POST'})}f
 
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){ closeModal(); return; }
-  const tag=(document.activeElement&&document.activeElement.tagName||'').toLowerCase();
-  if(e.key==='/'&&tag!=='input'&&tag!=='textarea'&&tag!=='select'){
-    const search=$('#searchRows'); if(search){ e.preventDefault(); search.focus(); }
-  }
 });
 
 $('#passwordToggle').onclick=()=>{
