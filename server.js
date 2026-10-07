@@ -826,6 +826,87 @@ async function api(req, res, url) {
     return store.getUploadStream(attachment.storedName).on('error', () => { if (!res.headersSent) sendJson(res, 404, { error: 'File is missing.' }); else res.end(); }).pipe(res);
   }
 
+  const submissionMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)$/);
+  if (req.method === 'PATCH' && submissionMatch) {
+    const user = requireUser(req, res, db);
+    if (!user) return;
+    const record = db.submissions.find(s => s.id === submissionMatch[1]);
+    if (!record) return sendJson(res, 404, { error: 'Submission not found.' });
+    const body = await readBody(req);
+    const action = normalize(body.action);
+    const sourceMonth = recordAccountingMonth(record);
+    const sourcePeriod = db.accountingMonths.find(item => item.month === sourceMonth);
+
+    if (action === 'move_month') {
+      if (user.role !== 'admin') return sendJson(res, 403, { error: 'Only the owner can move a submission between months.' });
+      const accountingMonth = normalize(body.accountingMonth);
+      if (!isAccountingMonth(accountingMonth)) return sendJson(res, 400, { error: 'Choose a valid month.' });
+      const targetPeriod = db.accountingMonths.find(item => item.month === accountingMonth);
+      if (!targetPeriod || targetPeriod.status !== 'open') return sendJson(res, 409, { error: 'Open the destination month before moving a submission.' });
+      if (sourcePeriod?.status === 'closed') return sendJson(res, 409, { error: 'Reopen the source month before moving a submission.' });
+      if (sourceMonth === accountingMonth) return sendJson(res, 200, { submission: submissionView(record, db) });
+      record.accountingMonth = accountingMonth;
+      record.updatedAt = now();
+      (db.commissions || []).filter(item => item.submissionId === record.id).forEach(item => { item.accountingMonth = accountingMonth; });
+      record.history = record.history || [];
+      record.history.unshift({ status: record.status, at: record.updatedAt, by: user.id, note: `Moved from ${sourceMonth} to ${accountingMonth}` });
+      audit(db, user.id, 'submission.month_moved', { submissionId: record.id, fromMonth: sourceMonth, toMonth: accountingMonth });
+      await saveDb(db);
+      return sendJson(res, 200, { submission: submissionView(record, db) });
+    }
+
+    const canEdit = user.role === 'admin' || record.affiliateId === user.id;
+    if (!canEdit) return sendJson(res, 403, { error: 'You can only edit your own submissions.' });
+    if (!['pending', 'needs_review'].includes(record.status)) return sendJson(res, 409, { error: 'Only submissions still awaiting approval can be edited or deleted.' });
+    if (sourcePeriod?.status === 'closed') return sendJson(res, 409, { error: 'Reopen this month before editing or deleting its submissions.' });
+
+    const customerName = normalize(body.customerName).slice(0, 120);
+    const pickrUsername = normalize(body.pickrUsername).slice(0, 120);
+    const operator = normalize(body.operator).slice(0, 120);
+    const signupDate = normalize(body.signupDate).slice(0, 20);
+    const amount = Number(body.amount);
+    const notes = normalize(body.notes).slice(0, 1200);
+    if (!customerName || !pickrUsername || !operator || !signupDate || !Number.isFinite(amount) || amount < 0) {
+      return sendJson(res, 400, { error: 'Name, Pickr username, operator, signup date, and a valid amount are required.' });
+    }
+    const submittingUser = db.users.find(item => item.id === record.affiliateId);
+    const rates = availableOperatorRates(db, submittingUser);
+    if (!Object.prototype.hasOwnProperty.call(rates, operator)) return sendJson(res, 400, { error: 'Choose an available operator.' });
+    const dedupeKey = `${normalizeRef(operator)}::${normalizeRef(pickrUsername)}`;
+    const duplicate = db.submissions.find(item => item.id !== record.id && (item.dedupeKey || `${normalizeRef(item.operator)}::${normalizeRef(item.pickrUsername || item.externalUserId)}`) === dedupeKey && item.status !== 'rejected');
+    if (duplicate) return sendJson(res, 409, { error: 'That Pickr username has already been submitted for this operator.' });
+    record.customerName = customerName;
+    record.pickrUsername = pickrUsername;
+    record.operator = operator;
+    record.amount = amount;
+    record.reimbursement = { ...(record.reimbursement || {}), status: 'unpaid', amount, paidAt: null, paidBy: null };
+    record.signupDate = signupDate;
+    record.notes = notes;
+    record.dedupeKey = dedupeKey;
+    record.updatedAt = now();
+    record.history = record.history || [];
+    record.history.unshift({ status: record.status, at: record.updatedAt, by: user.id, note: 'Submission details updated' });
+    audit(db, user.id, 'submission.updated', { submissionId: record.id, accountingMonth: sourceMonth });
+    await saveDb(db);
+    return sendJson(res, 200, { submission: submissionView(record, db) });
+  }
+
+  if (req.method === 'DELETE' && submissionMatch) {
+    const user = requireUser(req, res, db);
+    if (!user) return;
+    const index = db.submissions.findIndex(s => s.id === submissionMatch[1]);
+    if (index < 0) return sendJson(res, 404, { error: 'Submission not found.' });
+    const record = db.submissions[index];
+    const sourcePeriod = db.accountingMonths.find(item => item.month === recordAccountingMonth(record));
+    if (!(user.role === 'admin' || record.affiliateId === user.id)) return sendJson(res, 403, { error: 'You can only delete your own submissions.' });
+    if (!['pending', 'needs_review'].includes(record.status)) return sendJson(res, 409, { error: 'Only submissions still awaiting approval can be deleted.' });
+    if (sourcePeriod?.status === 'closed') return sendJson(res, 409, { error: 'Reopen this month before deleting its submissions.' });
+    db.submissions.splice(index, 1);
+    audit(db, user.id, 'submission.deleted', { submissionId: record.id, accountingMonth: recordAccountingMonth(record), operator: record.operator });
+    await saveDb(db);
+    return sendJson(res, 200, { ok: true });
+  }
+
   const statusMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/status$/);
   if (req.method === 'PATCH' && statusMatch) {
     const user = requireUser(req, res, db, 'admin');

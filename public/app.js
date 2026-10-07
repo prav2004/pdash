@@ -371,6 +371,9 @@ async function renderSubmissions(){
 function openSubmission(id, list=state.submissions){
   const s=list.find(x=>x.id===id); if(!s)return;
   const isAdmin=state.user.role==='admin';
+  const isOwner=s.affiliateId===state.user.id;
+  const canEdit=(isAdmin||isOwner)&&['pending','needs_review'].includes(s.status);
+  const openMonths=state.accountingMonths.filter(item=>item.status==='open');
   const reimbursement=s.reimbursement || {status:'unpaid',amount:Number(s.amount||0)};
   const history=(s.history||[]).map(h=>`<div class="history-item"><div class="history-dot"></div><div class="history-copy"><b>${esc(statusLabel(h.status))}</b><div>${fmtDateTime(h.at)}${h.note?` · ${esc(h.note)}`:''}</div></div></div>`).join('');
   const attachments=(s.attachments||[]).map(a=>{
@@ -391,7 +394,8 @@ function openSubmission(id, list=state.submissions){
       ${s.adminNote?`<div class="detail-item" style="grid-column:1/-1"><small>Admin note</small><b>${esc(s.adminNote)}</b></div>`:''}
     </div>
     <div class="evidence-section"><div class="evidence-heading"><b>Screenshots / proof</b><span>${(s.attachments||[]).length} file${(s.attachments||[]).length===1?'':'s'}</span></div>${attachments?`<div class="evidence-grid">${attachments}</div>`:'<div class="empty compact">No screenshots were attached.</div>'}</div>
-    ${isAdmin?`<textarea id="adminNote" class="modal-note" placeholder="Optional note to record with this decision">${esc(s.adminNote||'')}</textarea><div class="modal-actions"><button class="btn btn-good" data-status="approved">Approve</button><button class="btn btn-soft" data-status="needs_review">Needs review</button><button class="btn btn-danger" data-status="rejected">Reject</button><button class="btn" data-status="pending">Set pending</button></div>${s.status==='approved'&&reimbursement.status!=='paid'&&Number(s.amount||0)>0?`<button class="btn btn-primary" id="reimburseDeposit">Mark $${Number(s.amount).toFixed(2)} deposit reimbursed</button>`:''}`:''}
+    ${canEdit?`<details class="submission-editor"><summary>Edit submission</summary><div class="form-grid" style="margin-top:14px"><label>User full name<input id="editCustomerName" value="${esc(s.customerName)}"></label><label>Pickr username<input id="editPickrUsername" value="${esc(submissionUser(s))}"></label><label>Operator<input id="editOperator" value="${esc(s.operator)}"></label><label>Amount wagered<input id="editAmount" type="number" min="0" step="0.01" value="${Number(s.amount||0)}"></label><label>Signup date<input id="editSignupDate" type="date" value="${esc(s.signupDate||'')}"></label><label class="full">Notes<textarea id="editNotes">${esc(s.notes||'')}</textarea></label></div><div class="modal-actions"><button class="btn btn-primary" id="saveSubmission">Save changes</button><button class="btn btn-danger" id="deleteSubmission">Delete submission</button></div></details>`:''}
+    ${isAdmin?`<div class="month-move"><b>Owner month switch</b><p class="muted">Move this submission and linked commission records to an open month.</p><div class="toolbar"><select id="moveSubmissionMonth" class="filter-input">${openMonths.map(item=>`<option value="${item.month}" ${item.month===s.accountingMonth?'selected':''}>${esc(monthLabel(item.month))}</option>`).join('')}</select><button class="btn btn-soft small-btn" id="moveSubmission">Move month</button></div></div><textarea id="adminNote" class="modal-note" placeholder="Optional note to record with this decision">${esc(s.adminNote||'')}</textarea><div class="modal-actions"><button class="btn btn-good" data-status="approved">Approve</button><button class="btn btn-soft" data-status="needs_review">Needs review</button><button class="btn btn-danger" data-status="rejected">Reject</button><button class="btn" data-status="pending">Set pending</button></div>${s.status==='approved'&&reimbursement.status!=='paid'&&Number(s.amount||0)>0?`<button class="btn btn-primary" id="reimburseDeposit">Mark $${Number(s.amount).toFixed(2)} deposit reimbursed</button>`:''}`:''}
     <div class="history-list"><b style="font-size:11px">Status history</b>${history||'<div class="muted" style="font-size:11px;margin-top:10px">No history.</div>'}</div>`;
   $('#modal').classList.remove('hidden');
   $$('[data-download-file]').forEach(button => button.onclick=async()=>{
@@ -412,6 +416,28 @@ function openSubmission(id, list=state.submissions){
       closeModal();
       await renderSubmissions();
     } catch (error) { toast(error.message, true); }
+  });
+  $('#saveSubmission') && ($('#saveSubmission').onclick=async()=>{
+    try {
+      await api(`/api/submissions/${id}`,{method:'PATCH',body:JSON.stringify({customerName:$('#editCustomerName').value,pickrUsername:$('#editPickrUsername').value,operator:$('#editOperator').value,amount:$('#editAmount').value,signupDate:$('#editSignupDate').value,notes:$('#editNotes').value})});
+      toast('Submission updated.'); closeModal(); await renderSubmissions();
+    } catch(error) { toast(error.message,true); }
+  });
+  $('#deleteSubmission') && ($('#deleteSubmission').onclick=async()=>{
+    if(!confirm('Delete this submission? This cannot be undone.')) return;
+    try {
+      await api(`/api/submissions/${id}`,{method:'DELETE'});
+      toast('Submission deleted.'); closeModal(); await renderSubmissions();
+    } catch(error) { toast(error.message,true); }
+  });
+  $('#moveSubmission') && ($('#moveSubmission').onclick=async()=>{
+    const accountingMonth=$('#moveSubmissionMonth').value;
+    if(accountingMonth===s.accountingMonth){ toast('This submission is already in that month.'); return; }
+    if(!confirm(`Move this submission to ${monthLabel(accountingMonth)}?`)) return;
+    try {
+      await api(`/api/submissions/${id}`,{method:'PATCH',body:JSON.stringify({action:'move_month',accountingMonth})});
+      toast(`Submission moved to ${monthLabel(accountingMonth)}.`); closeModal(); await renderSubmissions();
+    } catch(error) { toast(error.message,true); }
   });
   $$('[data-status]').forEach(b=>b.onclick=async()=>{
     try{
